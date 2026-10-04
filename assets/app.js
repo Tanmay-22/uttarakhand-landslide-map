@@ -52,7 +52,8 @@
   }
   function writeHash() {
     if (!S.run) return;
-    var h = '#date=' + S.run.issue_date + '&rain=' + (S.run.hindcast ? 'observed' : 'forecast') + '&day=' + S.day + '&layer=' + S.layer;
+    var h = '#date=' + S.run.issue_date + '&rain=' + (S.run.hindcast ? 'observed' : 'forecast') + '&day=' + S.day + '&layer=' + S.layer +
+            '&base=' + S.base + '&op=' + Math.round(S.opacity * 100);
     history.replaceState(null, '', h);
   }
 
@@ -74,7 +75,25 @@
     S.dates = Object.keys(S.byDate).sort();
 
     map = L.map('map', {zoomSnap: 1, preferCanvas: true, attributionControl: true});
-    L.tileLayer(idx.basemap.url, {attribution: idx.basemap.attribution, maxZoom: 18}).addTo(map);
+    // place names over satellite imagery sit above the output layer and take no clicks
+    map.createPane('labels').style.zIndex = 450;
+    map.getPane('labels').style.pointerEvents = 'none';
+    S.bases = {};
+    idx.basemaps.forEach(function (b) {
+      var opt = {attribution: b.attribution, maxNativeZoom: b.max_zoom || 18, maxZoom: 18};
+      var lay = L.tileLayer(b.url, opt);
+      if (b.labels) lay = L.layerGroup([lay, L.tileLayer(b.labels, {maxNativeZoom: b.max_zoom || 18, maxZoom: 18, pane: 'labels'})]);
+      S.bases[b.key] = lay;
+      var o = document.createElement('option'); o.value = b.key; o.textContent = b.name; $('baseSel').appendChild(o);
+    });
+    var h0 = readHash();
+    S.opacity = h0.op >= 0 && h0.op <= 100 && h0.op !== '' ? h0.op / 100 : (idx.overlay_opacity != null ? idx.overlay_opacity : 1);
+    $('opacity').value = Math.round(S.opacity * 100);
+    $('opacity').addEventListener('input', function () {
+      S.opacity = this.value / 100; if (S.overlay) S.overlay.setOpacity(S.opacity); writeHash();
+    });
+    setBase(S.bases[h0.base] ? h0.base : $('baseSel').value);
+    $('baseSel').addEventListener('change', function () { setBase(this.value); writeHash(); });
     S.bounds = L.latLngBounds(idx.static.bounds);
     map.fitBounds(S.bounds);
     // the page may open in a hidden or zero-size frame: fit again once the map has a size
@@ -228,11 +247,16 @@
     var url = layerUrl(S.layer);
     if (url === S.overlayUrl) { refreshLegend(); return; }
     var old = S.overlay;
-    var ov = L.imageOverlay(url, S.bounds, {className: 'px', interactive: false});
+    var ov = L.imageOverlay(url, S.bounds, {className: 'px', interactive: false, opacity: S.opacity});
     ov.once('load error', function () { if (old) map.removeLayer(old); });
     ov.addTo(map);
     S.overlay = ov; S.overlayUrl = url;
     refreshLegend();
+  }
+  function setBase(key) {
+    if (S.base) map.removeLayer(S.bases[S.base]);
+    S.base = key; $('baseSel').value = key;
+    S.bases[key].addTo(map);
   }
   function addLegend() {
     var Legend = L.Control.extend({options: {position: 'bottomright'}, onAdd: function () {
