@@ -58,7 +58,7 @@
   }
 
   // ------------------------------------------------------------------ start
-  getJSON('data/index.json').then(init).catch(function (e) {
+  fetch('data/index.json', {cache: 'no-cache'}).then(function (r) { if (!r.ok) throw new Error('data/index.json: ' + r.status); return r.json(); }).then(init).catch(function (e) {
     $('runHead').innerHTML = '<p class="note">Could not load the site data (' + esc(e.message) + '). ' +
       'If you opened this file directly from disk, serve the folder with a web server instead.</p>';
   });
@@ -79,7 +79,7 @@
     map.createPane('labels').style.zIndex = 450;
     map.getPane('labels').style.pointerEvents = 'none';
     S.bases = {};
-    idx.basemaps.forEach(function (b) {
+    (idx.basemaps || [{key: 'b0', name: 'Base map', url: idx.basemap.url, attribution: idx.basemap.attribution}]).forEach(function (b) {
       var opt = {attribution: b.attribution, maxNativeZoom: b.max_zoom || 18, maxZoom: 18};
       var lay = L.tileLayer(b.url, opt);
       if (b.labels) lay = L.layerGroup([lay, L.tileLayer(b.labels, {maxNativeZoom: b.max_zoom || 18, maxZoom: 18, pane: 'labels'})]);
