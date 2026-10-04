@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uttarakhand landslide priority map</title>
+<meta name="description" content="Research model: daily landslide hazard, impact and priority for Uttarakhand, India.">
+<link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand">
+    <h1 id="title">Uttarakhand landslide priority map</h1>
+    <p class="warn" id="disclaimer"><b>Research model, not an official warning.</b>
+      For official warnings follow <span id="official"></span>.</p>
+  </div>
+  <div id="bar" role="toolbar" aria-label="Map controls">
+    <div class="ctl">
+      <span class="lab">Date</span>
+      <button id="dateBtn" type="button" aria-haspopup="dialog" aria-expanded="false"><span id="dateTxt">…</span> &#9662;</button>
+      <button id="prevBtn" type="button" title="Previous date with data" aria-label="Previous date">&#8249;</button>
+      <button id="nextBtn" type="button" title="Next date with data" aria-label="Next date">&#8250;</button>
+    </div>
+    <div class="ctl" id="rainCtl" hidden>
+      <span class="lab">Rain</span>
+      <div class="seg" id="rainSeg"></div>
+    </div>
+    <div class="ctl">
+      <span class="lab">Day</span>
+      <div class="seg" id="daySeg"></div>
+    </div>
+    <div class="ctl">
+      <label class="lab" for="layerSel">Layer</label>
+      <select id="layerSel"></select>
+    </div>
+  </div>
+  <div id="cal" class="cal" role="dialog" aria-label="Choose a date" hidden></div>
+</header>
+<main>
+  <div id="map" aria-label="Map"></div>
+  <aside id="panel">
+    <section id="runHead"></section>
+    <details id="howto">
+      <summary>How to read this</summary>
+      <ul>
+        <li><b>Priority</b> (the default map) combines the day's <b>hazard alert</b> with the <b>impact</b>: who and what a
+          landslide starting in a 250 m cell could reach. P1 = red alert with high or very high impact; P2 = red with medium,
+          or orange with high or more; P3 = red with low, orange with medium, or yellow with high or more.</li>
+        <li><b>Hazard alerts</b> come from a model of rain (forecast or observed) and terrain. Red is the top 1 % of all
+          cell-days in the record, orange the top 3 %, yellow the top 10 %. Most days are green almost everywhere.</li>
+        <li><b>Day 1</b> is the day after the issue date, day 2 and day 3 the next two. The forecast gets less certain with each day.</li>
+        <li><b>Hindcast</b> dates were run later with observed satellite rain (IMERG), not with the forecast issued that day.</li>
+        <li>The <b>place list</b> ranks places by probability x impact. Click a row to zoom to it. Click the map for the values of
+          the most urgent 250 m cell in that ~1 km square.</li>
+        <li>Impact counts people in homes, road users, facilities, pilgrims in yatra months (May, June, September to November)
+          and people cut off or on long detours if a lifeline road is blocked. It is an estimate from open data
+          (OpenStreetMap, satellite building footprints and population grids) and misses things those miss.</li>
+        <li>Landslides that are never reported cannot be learned from, so the probabilities are a lower bound and quiet,
+          remote areas may be under-rated.</li>
+      </ul>
+    </details>
+    <section id="places">
+      <h2>Places</h2>
+      <div class="opts">
+        <select id="distSel" aria-label="District"></select>
+        <label><input type="checkbox" id="hideNone"> Only places with a priority</label>
+      </div>
+      <p class="note" id="placeNote"></p>
+      <div class="tw"><table id="placeTbl" class="tbl">
+        <thead><tr><th>#</th><th class="l">Place</th><th>Priority</th><th>Alert</th><th title="People living in the path of a landslide from the place's top cell">In path</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+    <section id="dists">
+      <h2>Districts</h2>
+      <div class="tw"><table id="distTbl" class="tbl">
+        <thead><tr><th class="l">District</th><th title="Share of the district's area at priority 1">P1</th><th title="Share at red alert">Red</th><th>Max alert</th><th class="l">Top place</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+    <section id="downloads">
+      <h2>Downloads</h2>
+      <ul id="dlList"></ul>
+    </section>
+    <footer id="foot"></footer>
+  </aside>
+</main>
+<script src="assets/vendor/leaflet/leaflet.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
