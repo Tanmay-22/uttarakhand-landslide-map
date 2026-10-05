@@ -114,7 +114,9 @@
     $('nextBtn').addEventListener('click', function () { stepDate(1); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeCal(); });
     document.addEventListener('click', function (e) {
-      if (!$('cal').hidden && !$('cal').contains(e.target) && !$('dateBtn').contains(e.target)) closeCal();
+      // composedPath is fixed when the click starts, so a button the calendar re-renders away still counts as inside
+      var path = e.composedPath ? e.composedPath() : [e.target];
+      if (!$('cal').hidden && path.indexOf($('cal')) < 0 && path.indexOf($('dateBtn')) < 0) closeCal();
     });
     renderFooter();
 
@@ -337,15 +339,23 @@
   function toggleCal() { if ($('cal').hidden) openCal(); else closeCal(); }
   function closeCal() { $('cal').hidden = true; $('dateBtn').setAttribute('aria-expanded', 'false'); }
   function openCal() {
-    var d = pd(S.run.issue_date); S.calMonth = {y: d.y, m: d.m};
+    var d = pd(S.run.issue_date); S.calMonth = {y: d.y, m: d.m}; S.calView = 'days';
     renderCal(); $('cal').hidden = false; $('dateBtn').setAttribute('aria-expanded', 'true');
   }
+  // the calendar covers 1 Aug 2000 (or the first date with data) to 3 days ahead
+  function calFirst() { var f = S.od ? S.od.earliest : S.dates[0]; return S.dates[0] < f ? S.dates[0] : f; }
+  function calLast() { var l = addDays(todayUTC(), S.od ? S.od.days_ahead : 0), m = S.dates[S.dates.length - 1]; return m > l ? m : l; }
+  function ym(s) { var d = pd(s); return d.y * 12 + d.m; }
   function maxAlert(e) { return Math.max(e.forecast ? e.forecast.max_alert : 0, e.observed ? e.observed.max_alert : 0); }
   function renderCal() {
+    if (S.calView === 'months') return renderMonths();
+    if (S.calView === 'years') return renderYears();
     var c = S.calMonth, first = new Date(Date.UTC(c.y, c.m, 1)), days = new Date(Date.UTC(c.y, c.m + 1, 0)).getUTCDate();
     var lead = (first.getUTCDay() + 6) % 7;   // Monday first
-    var h = '<div class="hd"><button type="button" data-mv="-1" aria-label="Previous month">&#8249;</button><b>' +
-            MONTHS_LONG[c.m] + ' ' + c.y + '</b><button type="button" data-mv="1" aria-label="Next month">&#8250;</button></div>' +
+    var cur = c.y * 12 + c.m, lo = ym(calFirst()), hi = ym(calLast());
+    var h = '<div class="hd"><button type="button" data-mv="-1" aria-label="Previous month"' + (cur <= lo ? ' disabled' : '') + '>&#8249;</button>' +
+            '<button type="button" class="ttl" data-view="months" title="Choose a month">' + MONTHS_LONG[c.m] + ' ' + c.y + ' &#9662;</button>' +
+            '<button type="button" data-mv="1" aria-label="Next month"' + (cur >= hi ? ' disabled' : '') + '>&#8250;</button></div>' +
             '<table><tr>' + ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map(function (x) { return '<th>' + x + '</th>'; }).join('') + '</tr><tr>';
     for (var i = 0; i < lead; i++) h += '<td></td>';
     for (var d = 1; d <= days; d++) {
@@ -373,12 +383,7 @@
            return '<option value="' + s + '">' + nice(s) + (S.byDate[s].forecast ? '' : ' (hindcast)') + '</option>'; }).join('') +
          '</select></div>';
     var cal = $('cal'); cal.innerHTML = h;
-    cal.querySelectorAll('[data-mv]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        var m = S.calMonth.m + (+b.getAttribute('data-mv'));
-        S.calMonth = {y: S.calMonth.y + Math.floor(m / 12), m: (m + 12) % 12}; renderCal();
-      });
-    });
+    wireCalNav(cal);
     cal.querySelectorAll('[data-date]').forEach(function (b) {
       b.addEventListener('click', function () { closeCal(); openDate(b.getAttribute('data-date'), S.run.hindcast ? 'observed' : 'forecast'); });
     });
@@ -390,6 +395,57 @@
     });
     cal.querySelector('.jump select').addEventListener('change', function () {
       if (this.value) { closeCal(); openDate(this.value, 'forecast'); }
+    });
+  }
+
+  function wireCalNav(cal) {
+    cal.querySelectorAll('[data-mv]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var m = S.calMonth.m + (+b.getAttribute('data-mv'));
+        S.calMonth = {y: S.calMonth.y + Math.floor(m / 12), m: (m + 12) % 12}; renderCal();
+      });
+    });
+    cal.querySelectorAll('[data-view]').forEach(function (b) {
+      b.addEventListener('click', function () { S.calView = b.getAttribute('data-view'); renderCal(); });
+    });
+  }
+  function monthHasData(y, m) {
+    var pre = y + '-' + String(m + 1).padStart(2, '0');
+    return S.dates.some(function (s) { return s.slice(0, 7) === pre; });
+  }
+  function renderMonths() {
+    var y = S.calMonth.y, lo = ym(calFirst()), hi = ym(calLast()), fy = pd(calFirst()).y, ly = pd(calLast()).y;
+    var h = '<div class="hd"><button type="button" data-yr="-1" aria-label="Previous year"' + (y <= fy ? ' disabled' : '') + '>&#8249;</button>' +
+            '<button type="button" class="ttl" data-view="years" title="Choose a year">' + y + ' &#9662;</button>' +
+            '<button type="button" data-yr="1" aria-label="Next year"' + (y >= ly ? ' disabled' : '') + '>&#8250;</button></div><div class="grid g3">';
+    for (var m = 0; m < 12; m++) {
+      var k = y * 12 + m, ok = k >= lo && k <= hi;
+      h += '<button type="button" data-mon="' + m + '"' + (ok ? '' : ' disabled') +
+           ' class="' + (monthHasData(y, m) ? 'has' : '') + (m === S.calMonth.m ? ' sel' : '') + '">' + MONTHS[m] + '</button>';
+    }
+    h += '</div><div class="key">Bold months have dates with data.</div>';
+    var cal = $('cal'); cal.innerHTML = h;
+    cal.querySelectorAll('[data-yr]').forEach(function (b) {
+      b.addEventListener('click', function () { S.calMonth = {y: S.calMonth.y + (+b.getAttribute('data-yr')), m: S.calMonth.m}; renderCal(); });
+    });
+    cal.querySelectorAll('[data-mon]').forEach(function (b) {
+      b.addEventListener('click', function () { S.calMonth = {y: S.calMonth.y, m: +b.getAttribute('data-mon')}; S.calView = 'days'; renderCal(); });
+    });
+    wireCalNav(cal);
+  }
+  function renderYears() {
+    var fy = pd(calFirst()).y, ly = pd(calLast()).y, h = '<div class="hd"><span></span><b>' + fy + ' to ' + ly + '</b><span></span></div><div class="grid g4">';
+    for (var y = ly; y >= fy; y--) {
+      var data = S.dates.some(function (s) { return +s.slice(0, 4) === y; });
+      h += '<button type="button" data-year="' + y + '" class="' + (data ? 'has' : '') + (y === S.calMonth.y ? ' sel' : '') + '">' + y + '</button>';
+    }
+    h += '</div><div class="key">Bold years have dates with data.</div>';
+    var cal = $('cal'); cal.innerHTML = h;
+    cal.querySelectorAll('[data-year]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var y = +b.getAttribute('data-year'), lo = ym(calFirst()), hi = ym(calLast()), k = Math.min(Math.max(y * 12 + S.calMonth.m, lo), hi);
+        S.calMonth = {y: Math.floor(k / 12), m: k % 12}; S.calView = 'months'; renderCal();
+      });
     });
   }
 

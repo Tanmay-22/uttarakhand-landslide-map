@@ -128,3 +128,15 @@ button.link { border: 0; background: none; color: var(--accent); padding: 4px 0;
   border-radius: 5px; background: #eef4fb; color: #1d3c5a; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .reqcard .busy::before { animation: none; } }
+
+/* calendar: month and year views, title button */
+.cal .hd .ttl { border-color: transparent; font-weight: 600; font-size: 14px; }
+.cal .hd .ttl:hover { border-color: var(--line); }
+.cal .hd button[disabled] { opacity: .35; cursor: default; }
+.cal .grid { display: grid; gap: 4px; max-height: 260px; overflow-y: auto; }
+.cal .grid.g3 { grid-template-columns: repeat(3, 1fr); }
+.cal .grid.g4 { grid-template-columns: repeat(4, 1fr); }
+.cal .grid button { min-height: 34px; border-color: var(--line); }
+.cal .grid button.has { font-weight: 700; }
+.cal .grid button.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+.cal .grid button[disabled] { color: #bbb; cursor: default; }
