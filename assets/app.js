@@ -68,11 +68,8 @@
     document.title = idx.title; $('title').textContent = idx.title;
     $('official').innerHTML = idx.official_links.map(function (l) {
       return '<a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.name) + '</a>'; }).join(' and ');
-    idx.runs.forEach(function (r) {
-      var e = S.byDate[r.date] || (S.byDate[r.date] = {});
-      e[r.hindcast ? 'observed' : 'forecast'] = r;
-    });
-    S.dates = Object.keys(S.byDate).sort();
+    indexRuns(idx);
+    S.od = idx.ondemand && idx.ondemand.worker_url ? idx.ondemand : null;
 
     map = L.map('map', {zoomSnap: 1, preferCanvas: true, attributionControl: true});
     // place names over satellite imagery sit above the output layer and take no clicks
@@ -127,7 +124,155 @@
     sel.value = S.layer;
     if (h.day >= 1 && h.day <= 3) S.day = +h.day;
     var date = S.byDate[h.date] ? h.date : latestDate();
-    openDate(date, h.rain);
+    var pending = loadPending();
+    openDate(date, h.rain).then(function () {
+      if (pending) waitFor(pending);
+      else if (h.date && !S.byDate[h.date] && aheadDay(h.date)) openAhead(h.date);
+      else if (h.date && !S.byDate[h.date] && canRequest(h.date)) showRequest(h.date);
+    });
+  }
+
+  function indexRuns(idx) {
+    S.byDate = {};
+    idx.runs.forEach(function (r) {
+      var e = S.byDate[r.date] || (S.byDate[r.date] = {});
+      e[r.hindcast ? 'observed' : 'forecast'] = r;
+    });
+    S.dates = Object.keys(S.byDate).sort();
+  }
+
+  // ------------------------------------------------------------------ predictions on request (S58)
+  // A date without a prediction, or with an out-of-date one, can be asked for: the Worker starts a run
+  // in GitHub Actions, and the page checks the date list every 30 seconds until the date appears.
+  function todayUTC() { return new Date().toISOString().slice(0, 10); }
+  function addDays(s, n) { return new Date(Date.parse(s + 'T00:00:00Z') + n * 864e5).toISOString().slice(0, 10); }
+  function canRequest(s) { return !!S.od && s >= S.od.earliest && s <= addDays(todayUTC(), S.od.days_ahead); }
+  // the next 3 dates are days 1 to 3 of today's forecast (day 1 = the day after the issue date): the day, or 0
+  function aheadDay(s) {
+    var today = todayUTC(), t = (S.byDate[today] || {}).forecast;
+    if (!t || s <= today || s > addDays(today, 3)) return 0;
+    return Math.round((Date.parse(s) - Date.parse(today)) / 864e5);
+  }
+  function openAhead(s) { S.day = aheadDay(s); return openDate(todayUTC(), 'forecast'); }
+  function madeMs(r) { return r && r.made ? Date.parse(r.made) : NaN; }
+
+  // What a click on an existing date could still improve: today's forecast after the weather models
+  // have updated, or a forecast-style date once observed rain is likely in. null if nothing.
+  function improvement(date) {
+    if (!S.od) return null;
+    var today = todayUTC(), e = S.byDate[date] || {};
+    if (date >= today) {
+      var t = (S.byDate[today] || {}).forecast;
+      if (date > addDays(today, S.od.days_ahead)) return null;
+      if (!t || !(Date.now() - madeMs(t) < S.od.forecast_max_age_h * 36e5)) {
+        return {label: t ? 'Update today’s forecast' : 'Make today’s forecast',
+                text: t ? 'The weather models have updated since this forecast was made.' : 'There is no forecast for today yet.'};
+      }
+      return null;
+    }
+    if (e.forecast && !e.observed && date <= addDays(today, -S.od.observed_after_days)) {
+      return {label: 'Make the observed-rain version',
+              text: 'Satellite rain for these days should now be in, so a hindcast with observed rain can be made.'};
+    }
+    return null;
+  }
+
+  function reqCard(inner) { $('runHead').innerHTML = '<div class="reqcard">' + inner + '</div>'; }
+  function backLink() {
+    return S.run ? '<button type="button" class="link" id="reqBack">Back to ' + nice(S.run.issue_date) + '</button>' : '';
+  }
+  function wireBack() { var b = $('reqBack'); if (b) b.addEventListener('click', renderHead); }
+
+  function showRequest(date) {
+    var ahead = date > todayUTC();
+    reqCard('<h2>' + nice(date) + '</h2>' +
+      '<p>' + (ahead ? 'This date is covered by today’s forecast (day ' + Math.round((Date.parse(date) - Date.parse(todayUTC())) / 864e5) +
+                       '), which has not been made yet.'
+                     : 'There is no prediction for this date yet.') + '</p>' +
+      '<button type="button" class="primary" id="reqBtn">' + (ahead ? 'Make today’s forecast' : 'Make a prediction for this date') + '</button>' +
+      '<p class="note">Predictions are made on request and take about 10 minutes. You can keep using the map meanwhile.</p>' +
+      backLink());
+    $('reqBtn').addEventListener('click', function () { ask(date); });
+    wireBack();
+  }
+
+  function ask(date) {
+    reqCard('<h2>' + nice(date) + '</h2><p class="busy">Sending the request…</p>');
+    fetch(S.od.worker_url.replace(/\/$/, '') + '/request', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({date: date})
+    }).then(function (r) { return r.json().catch(function () { return {status: 'error'}; }); }).then(function (res) {
+      var st = res.status;
+      if (st === 'started' || st === 'running' || st === 'recently_done') {
+        var cur = (S.byDate[res.issue] || {})[res.run && res.run.slice(-6) === '_imerg' ? 'observed' : 'forecast'];
+        waitFor({asked: date, issue: res.issue, run: res.run, since: Date.now(), prev: cur ? cur.made || '' : ''});
+      } else if (st === 'up_to_date') {
+        refreshIndex().then(function () { if (S.byDate[res.issue]) openDate(res.issue, res.run && /_imerg$/.test(res.run) ? 'observed' : 'forecast'); });
+      } else if (st === 'limit') {
+        failCard(date, 'Today’s limit of predictions has been reached. Please try again tomorrow.', false);
+      } else if (st === 'not_possible') {
+        failCard(date, 'No prediction is possible for this date' + (res.reason ? ' (' + esc(res.reason) + ')' : '') + '.', false);
+      } else {
+        failCard(date, 'The prediction service could not start this date' + (res.reason ? ' (' + esc(res.reason) + ')' : '') + '.', true);
+      }
+    }).catch(function () { failCard(date, 'The prediction service could not be reached. Please check your connection.', true); });
+  }
+
+  function failCard(date, msg, retry) {
+    savePending(null);
+    reqCard('<h2>' + nice(date) + '</h2><p class="err">' + msg + '</p>' +
+      (retry ? '<button type="button" id="reqBtn">Try again</button> ' : '') + backLink());
+    if (retry) $('reqBtn').addEventListener('click', function () { ask(date); });
+    wireBack();
+  }
+
+  function waitFor(p) {
+    savePending(p);
+    if (S.waitTimer) clearTimeout(S.waitTimer);
+    var mins = Math.floor((Date.now() - p.since) / 6e4);
+    reqCard('<h2>' + nice(p.asked) + '</h2><p class="busy">Being made: usually about 10 minutes' +
+      (mins > 0 ? ' (' + mins + ' min so far)' : '') + '.</p>' +
+      '<p class="note">This page checks every 30 seconds and opens the date when it is ready. You can keep using the map.</p>' +
+      backLink());
+    wireBack();
+    S.waitTimer = setTimeout(function () { poll(p); }, 30000);
+  }
+
+  function poll(p) {
+    var kind = /_imerg$/.test(p.run) ? 'observed' : 'forecast';
+    refreshIndex().then(function () {
+      var r = (S.byDate[p.issue] || {})[kind];
+      if (r && (r.made || '') !== p.prev) {
+        savePending(null);
+        S.day = p.asked > p.issue ? Math.min(3, Math.round((Date.parse(p.asked) - Date.parse(p.issue)) / 864e5)) : S.day;
+        return openDate(p.issue, kind);
+      }
+      return fetch(S.od.worker_url.replace(/\/$/, '') + '/status?date=' + p.issue).then(function (x) { return x.json(); }).then(function (s) {
+        if (s.status === 'failed') failCard(p.asked, 'The prediction for this date could not be made.', true);
+        else if (s.status === 'done' && Date.now() - Date.parse(s.finished) > 5 * 6e4) {
+          // the run finished a while ago without a new version: nothing new could be made yet
+          failCard(p.asked, 'Nothing new could be made for this date yet (for a recent date, the satellite rain for ' +
+            'the following days is usually in about 5 days later).', false);
+        } else if (Date.now() - p.since > 45 * 6e4) failCard(p.asked, 'This is taking much longer than usual.', true);
+        else waitFor(p);
+      });
+    }).catch(function () { waitFor(p); });
+  }
+
+  function refreshIndex() {
+    return fetch('data/index.json?t=' + Date.now(), {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (idx) {
+      S.idx.runs = idx.runs; indexRuns(idx);
+      if (S.run) renderBar();
+    });
+  }
+
+  function savePending(p) {
+    try { if (p) localStorage.setItem('ondemand', JSON.stringify(p)); else localStorage.removeItem('ondemand'); } catch (e) { /* private mode */ }
+  }
+  function loadPending() {
+    try {
+      var p = JSON.parse(localStorage.getItem('ondemand') || 'null');
+      return p && S.od && Date.now() - p.since < 60 * 6e4 ? p : null;
+    } catch (e) { return null; }
   }
 
   function latestDate() {
@@ -211,12 +356,18 @@
         var tip = (e.forecast ? 'forecast' : '') + (e.forecast && e.observed ? ' and ' : '') + (e.observed ? 'hindcast (observed rain)' : '');
         h += '<td><button type="button" class="' + cls + '" data-date="' + s + '" style="--dot:' + N.alert_colors[maxAlert(e)] +
              '" title="' + nice(s) + ': ' + tip + '">' + d + '</button></td>';
+      } else if (aheadDay(s)) {
+        h += '<td><button type="button" class="has ahead" data-ahead="' + s + '" style="--dot:' + N.alert_colors[S.byDate[todayUTC()].forecast.max_alert] +
+             '" title="' + nice(s) + ': day ' + aheadDay(s) + ' of today’s forecast">' + d + '</button></td>';
+      } else if (canRequest(s)) {
+        h += '<td><button type="button" class="req" data-req="' + s + '" title="' + nice(s) + ': no prediction yet, click to make one">' + d + '</button></td>';
       } else {
         h += '<td><button type="button" disabled>' + d + '</button></td>';
       }
     }
     h += '</tr></table><div class="key">Bold dates have data; the dot shows the highest alert on days 1 to 3. ' +
-         'Dashed: hindcast only (observed rain).</div>';
+         'Dashed: hindcast only (observed rain).' +
+         (S.od ? ' Other dates from ' + nice(S.od.earliest) + ' to 3 days ahead can be made on request (about 10 minutes).' : '') + '</div>';
     h += '<div class="jump"><select aria-label="Jump to a date with data"><option value="">Jump to a date…</option>' +
          S.dates.slice().reverse().map(function (s) {
            return '<option value="' + s + '">' + nice(s) + (S.byDate[s].forecast ? '' : ' (hindcast)') + '</option>'; }).join('') +
@@ -230,6 +381,12 @@
     });
     cal.querySelectorAll('[data-date]').forEach(function (b) {
       b.addEventListener('click', function () { closeCal(); openDate(b.getAttribute('data-date'), S.run.hindcast ? 'observed' : 'forecast'); });
+    });
+    cal.querySelectorAll('[data-ahead]').forEach(function (b) {
+      b.addEventListener('click', function () { closeCal(); openAhead(b.getAttribute('data-ahead')); });
+    });
+    cal.querySelectorAll('[data-req]').forEach(function (b) {
+      b.addEventListener('click', function () { closeCal(); showRequest(b.getAttribute('data-req')); });
     });
     cal.querySelector('.jump select').addEventListener('change', function () {
       if (this.value) { closeCal(); openDate(this.value, 'forecast'); }
@@ -311,6 +468,12 @@
       '<div><b>' + pct(d.share.red) + '</b><span>area at red</span></div>' +
       '<div><b>' + pct(d.p_share.p1) + '</b><span>area at P1</span></div>' +
       '<div><b>' + num(d.places_by_priority.p1) + '</b><span>places at P1</span></div></div>';
+    var imp = improvement(r.issue_date);
+    if (imp) {
+      $('runHead').insertAdjacentHTML('beforeend', '<div class="hint"><span>' + imp.text + '</span> ' +
+        '<button type="button" id="impBtn">' + imp.label + '</button></div>');
+      $('impBtn').addEventListener('click', function () { ask(r.issue_date); });
+    }
   }
 
   function renderDistSel() {
