@@ -140,3 +140,22 @@ button.link { border: 0; background: none; color: var(--accent); padding: 4px 0;
 .cal .grid button.has { font-weight: 700; }
 .cal .grid button.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
 .cal .grid button[disabled] { color: #bbb; cursor: default; }
+
+/* side panel: hide and show */
+main { position: relative; }
+#panelBtn { position: absolute; z-index: 1000; top: 50%; right: 380px; transform: translateY(-50%); min-height: 56px; min-width: 24px; padding: 4px 5px;
+  border-radius: 6px 0 0 6px; border-right: 0; box-shadow: -1px 1px 4px rgba(0,0,0,.25); font-size: 18px; line-height: 1; }
+#panelBtn .txt { display: none; }
+body.nopanel #panel { display: none; }
+body.nopanel #panelBtn { right: 0; }
+body.nopanel #panelBtn .txt { display: inline; font-size: 12px; writing-mode: vertical-rl; transform: rotate(180deg); margin-top: 4px; }
+body.nopanel #panelBtn .ico { display: block; }
+@media (max-width: 760px) {
+  #panelBtn { position: static; transform: none; width: 100%; min-height: 40px; border-radius: 0; border-right: 1px solid var(--line);
+    border-left: 0; box-shadow: none; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  #panelBtn .ico { transform: rotate(90deg); font-size: 16px; }
+  #panelBtn .txt, body.nopanel #panelBtn .txt { display: inline; writing-mode: horizontal-tb; transform: none; margin: 0; font-size: 13px; }
+  body.nopanel #panelBtn .ico { display: inline; transform: rotate(-90deg); }
+  body.nopanel { height: 100%; }
+  body.nopanel #map { flex: 1; height: auto; }
+}

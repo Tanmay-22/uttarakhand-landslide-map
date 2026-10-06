@@ -53,8 +53,21 @@
   function writeHash() {
     if (!S.run) return;
     var h = '#date=' + S.run.issue_date + '&rain=' + (S.run.hindcast ? 'observed' : 'forecast') + '&day=' + S.day + '&layer=' + S.layer +
-            '&base=' + S.base + '&op=' + Math.round(S.opacity * 100);
+            '&base=' + S.base + '&op=' + Math.round(S.opacity * 100) + (S.panel ? '' : '&panel=0');
     history.replaceState(null, '', h);
+  }
+
+  // the side panel (below the map on a phone) can be hidden to give the map the room
+  function setPanel(open) {
+    S.panel = open;
+    document.body.classList.toggle('nopanel', !open);
+    var b = $('panelBtn');
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    var phone = window.matchMedia('(max-width: 760px)').matches;
+    b.querySelector('.ico').innerHTML = open ? '&#8250;' : '&#8249;';
+    b.querySelector('.txt').textContent = open ? 'Hide details' : (phone ? 'Show details' : 'Details');
+    b.title = open ? 'Hide the side panel' : 'Show the side panel';
+    if (map) map.invalidateSize();
   }
 
   // ------------------------------------------------------------------ start
@@ -89,6 +102,8 @@
     $('opacity').addEventListener('input', function () {
       S.opacity = this.value / 100; if (S.overlay) S.overlay.setOpacity(S.opacity); writeHash();
     });
+    setPanel(h0.panel !== '0');
+    $('panelBtn').addEventListener('click', function () { setPanel(!S.panel); writeHash(); });
     setBase(S.bases[h0.base] ? h0.base : $('baseSel').value);
     $('baseSel').addEventListener('change', function () { setBase(this.value); writeHash(); });
     S.bounds = L.latLngBounds(idx.static.bounds);
@@ -179,7 +194,10 @@
     return null;
   }
 
-  function reqCard(inner) { $('runHead').innerHTML = '<div class="reqcard">' + inner + '</div>'; }
+  function reqCard(inner) {
+    $('runHead').innerHTML = '<div class="reqcard">' + inner + '</div>';
+    if (!S.panel) { setPanel(true); writeHash(); }     // the request card lives in the side panel
+  }
   function backLink() {
     return S.run ? '<button type="button" class="link" id="reqBack">Back to ' + nice(S.run.issue_date) + '</button>' : '';
   }
