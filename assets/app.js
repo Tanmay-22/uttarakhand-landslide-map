@@ -79,8 +79,6 @@
   function init(idx) {
     S.idx = idx; N = idx.names;
     document.title = idx.title; $('title').textContent = idx.title;
-    $('official').innerHTML = idx.official_links.map(function (l) {
-      return '<a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.name) + '</a>'; }).join(' and ');
     indexRuns(idx);
     S.od = idx.ondemand && idx.ondemand.worker_url ? idx.ondemand : null;
 
@@ -134,6 +132,7 @@
       if (!$('cal').hidden && path.indexOf($('cal')) < 0 && path.indexOf($('dateBtn')) < 0) closeCal();
     });
     renderFooter();
+    initSearch();
 
     if (!S.dates.length) { $('runHead').innerHTML = '<p class="note">No dates have been built yet.</p>'; return; }
     var h = readHash();
@@ -611,6 +610,107 @@
     if (window.innerWidth < 760) $('map').scrollIntoView({block: 'start'});
   }
 
+  // ------------------------------------------------------------------ place search
+  function fold(x) { return x.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
+  function squash(x) { return fold(x).replace(/[^a-z0-9]/g, ''); }
+
+  function initSearch() {
+    var q = $('q'), list = $('qList');
+    if (!S.idx.static.places) { $('find').hidden = true; return; }
+    q.addEventListener('focus', loadGaz);
+    q.addEventListener('input', function () { loadGaz().then(function () { showHits(q.value); }); });
+    q.addEventListener('keydown', function (e) {
+      var items = list.querySelectorAll('li[data-k]'), on = list.querySelector('li.on'), k = on ? [].indexOf.call(items, on) : -1;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (list.hidden || !items.length) return;
+        e.preventDefault();
+        k = (k + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        items.forEach(function (li, i) { li.classList.toggle('on', i === k); });
+        items[k].scrollIntoView({block: 'nearest'});
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (items.length) pickHit(S.hits[+(on || items[0]).getAttribute('data-k')]);
+      } else if (e.key === 'Escape') { hideHits(); }
+    });
+    list.addEventListener('mousedown', function (e) { e.preventDefault(); });   // keep the focus in the box
+    list.addEventListener('click', function (e) {
+      var li = e.target.closest('li[data-k]'); if (li) pickHit(S.hits[+li.getAttribute('data-k')]);
+    });
+    document.addEventListener('click', function (e) { if (!$('find').contains(e.target)) hideHits(); });
+  }
+
+  function loadGaz() {
+    if (!S.gaz) {
+      S.gaz = getJSON('data/static/' + S.idx.static.places).then(function (g) {
+        g.places.forEach(function (p) { p.f = fold(p[0]); p.s = squash(p[0]); });
+        g.roads.forEach(function (r) { r.f = fold(r[0]); r.s = squash(r[0]); });
+        return g;
+      });
+      S.gaz.catch(function () { S.gaz = null; });
+    }
+    return S.gaz.then(function (g) { S.g = g; });
+  }
+
+  // names that are or start with the text first, bigger places and longer roads ahead (an exact name counts 10 times),
+  // then names with a word starting with the text, then the text anywhere
+  function findHits(text) {
+    var g = S.g, t = fold(text).trim(), sq = squash(text);
+    if (!g || !sq) return [];
+    var groups = [[], [], []];
+    function score(f, s) {
+      if (s.indexOf(sq) === 0) return 0;
+      if ((' ' + f).indexOf(' ' + t) >= 0 || f.split(/[^a-z0-9]+/).some(function (w) { return w.indexOf(sq) === 0; })) return 1;
+      return s.indexOf(sq) >= 0 ? 2 : -1;
+    }
+    function add(k, h, size, s) { if (k >= 0 && groups[k].length < 60) groups[k].push({w: size * (s === sq ? 10 : 1), h: h}); }
+    g.roads.forEach(function (r) { add(score(r.f, r.s), {road: r}, r[3] * 200, r.s); });
+    g.places.forEach(function (p) { add(score(p.f, p.s), {place: p}, p[4], p.s); });
+    return groups.map(function (a) { return a.sort(function (x, y) { return y.w - x.w; }); })
+      .reduce(function (a, b) { return a.concat(b); }).slice(0, 12).map(function (x) { return x.h; });
+  }
+
+  function showHits(text) {
+    var list = $('qList'), q = $('q');
+    S.hits = findHits(text);
+    if (!text.trim()) { hideHits(); return; }
+    var D = S.g.districts;
+    list.innerHTML = S.hits.length ? S.hits.map(function (h, k) {
+      if (h.road) {
+        var r = h.road;
+        return '<li role="option" data-k="' + k + '">' + esc(r[0]) + '<span class="sub">Road, ' + r[3].toFixed(r[3] < 10 ? 1 : 0) + ' km in ' +
+          esc(r[1].slice(0, 3).map(function (d) { return D[d]; }).join(', ')) + (r[1].length > 3 ? ' and more' : '') + '</span></li>';
+      }
+      var p = h.place;
+      return '<li role="option" data-k="' + k + '">' + esc(p[0]) + '<span class="sub">' + esc(p[5] === 'isolated_dwelling' ? 'hamlet' : p[5].split(';')[0]) +
+        ', ' + esc(D[p[1]]) + ' district' + (p[4] >= 1 ? ', about ' + num(p[4]) + ' people' : '') + '</span></li>';
+    }).join('') : '<li class="none">No town, village or road found</li>';
+    list.hidden = false; q.setAttribute('aria-expanded', 'true');
+  }
+
+  function hideHits() { $('qList').hidden = true; $('q').setAttribute('aria-expanded', 'false'); }
+
+  function pickHit(h) {
+    if (!h) return;
+    hideHits(); $('q').blur();
+    if (window.innerWidth < 760) $('map').scrollIntoView({block: 'start'});   // first, so the popup pans within the visible map
+    if (S.placeMarker) { map.removeLayer(S.placeMarker); S.placeMarker = null; }
+    if (h.road) {
+      var r = h.road, D = S.g.districts;
+      $('q').value = r[0];
+      map.closePopup();
+      map.fitBounds([[r[2][0], r[2][1]], [r[2][2], r[2][3]]], {padding: [20, 20]});
+      L.popup({maxWidth: 300}).setLatLng(map.getCenter()).setContent('<div class="pp"><b>' + esc(r[0]) + '</b><br>' + r[3].toFixed(r[3] < 10 ? 1 : 0) +
+        ' km in ' + esc(r[1].map(function (d) { return D[d]; }).join(', ')) + '. Switch to the <b>Lifeline roads</b> layer to see it, ' +
+        'or click the map along it for details.</div>').openOn(map);
+    } else {
+      var p = h.place, ll = L.latLng(p[2], p[3]);
+      $('q').value = p[0];
+      S.placeMarker = L.circleMarker(ll, {radius: 9, color: '#000', weight: 2, fill: false, interactive: false}).addTo(map);
+      map.setView(ll, S.idx.place_zoom);
+      openCell(ll, '<b style="font-size:14px">' + esc(p[0]) + '</b>, ' + esc(S.g.districts[p[1]]) + ' district<br>');
+    }
+  }
+
   function renderDistricts() {
     var rows = S.run.districts[String(S.day)] || [];
     $('distTbl').querySelector('tbody').innerHTML = rows.map(function (r, i) {
@@ -655,7 +755,8 @@
 
   function renderFooter() {
     $('foot').innerHTML = '<p><b>Research model, not an official warning.</b> Do not use this map to decide whether a place is safe. ' +
-      'For official warnings and advice follow ' + $('official').innerHTML + '.</p>' +
+      'For official warnings and advice follow ' + S.idx.official_links.map(function (l) {
+        return '<a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.name) + '</a>'; }).join(' and ') + '.</p>' +
       '<p>Data: NASA GPM IMERG rain; ECMWF IFS and NOAA GFS forecasts via Open-Meteo; Copernicus GLO-30 DEM; ESA WorldCover; ' +
       'Hansen Global Forest Change; MODIS NDVI; SoilGrids; OpenStreetMap contributors; Google Open Buildings; JRC GHS-POP; ' +
       'ISRO/NRSC Bhuvan landslide inventory; NASA COOLR; GEM seismic hazard (non-commercial licence); UDISE school list. ' +
@@ -693,13 +794,16 @@
     return S.lookups[id];
   }
 
-  function onMapClick(e) {
+  function onMapClick(e) { openCell(e.latlng, ''); }
+
+  function openCell(ll, title) {
     var run = S.run, day = S.day;
-    var pop = L.popup({maxWidth: 400}).setLatLng(e.latlng).setContent('<div class="pp">Loading…</div>').openOn(map);
+    var pop = L.popup({maxWidth: Math.min(400, map.getSize().x - 90), autoPanPaddingTopLeft: [50, 10]}).setLatLng(ll).setContent('<div class="pp">' + title + 'Loading…</div>').openOn(map);
+    if (!run) { pop.setContent('<div class="pp">' + title + '</div>'); return; }
     loadLookup(run.id).then(function (lk) {
       if (S.run !== run) return;
-      pop.setContent(cellHtml(lk, e.latlng, day));
-    }).catch(function (err) { pop.setContent('<div class="pp">Cell data could not be loaded (' + esc(err.message) + ').</div>'); });
+      pop.setContent(cellHtml(lk, ll, day).replace('<div class="pp">', '<div class="pp">' + title));
+    }).catch(function (err) { pop.setContent('<div class="pp">' + title + 'Cell data could not be loaded (' + esc(err.message) + ').</div>'); });
   }
 
   function cellHtml(lk, ll, day) {
